@@ -752,7 +752,11 @@
        alongside the notes: this is a per-device viewing choice, so it must
        not travel inside an exported backup. */
     const PREFS_KEY = 'kaki-bukit-point-guide:prefs';
-    const prefs = { autoLoadStreetView: false };
+    /* On by default so a copy handed to someone else shows Street View without
+       them having to find a setting. Anyone who turns it off has that stored
+       and respected from then on, and with no connection the panes fall back
+       to a placeholder rather than loading anything. */
+    const prefs = { autoLoadStreetView: true };
 
     function loadPrefs() {
       try {
@@ -1120,7 +1124,7 @@
         return `
       <figure class="kb-photo kb-streetview">
         <div class="kb-sv-frame" ${frameAttrs}>
-          <p class="kb-sv-hint text-small">Street View cannot be shown inside this page.</p>
+          <p class="kb-sv-hint text-small">Street View is blocked in this preview. Open the guide in Safari or Chrome, or tap below.</p>
           ${link ? `<a class="btn" href="${esc(link)}" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>` : ''}
         </div>
         ${caption}
