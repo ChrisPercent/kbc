@@ -54,6 +54,9 @@
 
     /* Comfortable minimum hit area; grows to 44px on touch-sized screens. */
     --tap: 34px;
+
+    /* The page's side gutter, exposed so a full-bleed element can cancel it. */
+    --page-gutter: max(16px, env(safe-area-inset-left));
   }
 
   /* Three theme states, not two. Most viewers are on "system" and carry no
@@ -118,8 +121,8 @@
   body {
     margin: 0;
     padding: 20px 16px 40px;
-    padding-left: max(16px, env(safe-area-inset-left));
-    padding-right: max(16px, env(safe-area-inset-right));
+    padding-left: var(--page-gutter);
+    padding-right: var(--page-gutter);
     padding-bottom: max(40px, env(safe-area-inset-bottom));
     color: var(--foreground);
     background: var(--background);
@@ -320,6 +323,54 @@
     #kb-point-guide .kb-map-note {
       margin: 7px 0 0;
       color: var(--muted-foreground);
+    }
+    #kb-point-guide .kb-map-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+
+    /* ---------------- Expanded map ---------------- */
+
+    #kb-point-guide .kb-map-fs {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      display: flex;
+      flex-direction: column;
+      background: var(--background, #fff);
+    }
+    #kb-point-guide .kb-map-fs[hidden] { display: none; }
+    #kb-point-guide .kb-fs-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 0 0 auto;
+      padding: 8px max(10px, env(safe-area-inset-right)) 8px max(10px, env(safe-area-inset-left));
+      padding-top: max(8px, env(safe-area-inset-top));
+      border-bottom: 1px solid var(--border);
+    }
+    #kb-point-guide .kb-zoom-label {
+      min-width: 4.5em;
+      color: var(--muted-foreground);
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+    }
+    #kb-point-guide .kb-fs-close { margin-left: auto; }
+    /* margin:auto on a flex item centres it without breaking scroll-to-edge,
+       which justify-content:center would. */
+    #kb-point-guide .kb-fs-scroll {
+      flex: 1 1 auto;
+      display: flex;
+      overflow: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 10px;
+      padding-bottom: max(10px, env(safe-area-inset-bottom));
+    }
+    #kb-point-guide .kb-fs-scroll .kb-map-wrap { flex: 0 0 auto; margin: auto; max-width: none; }
+    #kb-point-guide .kb-fs-hint {
+      flex: 0 0 auto;
+      margin: 0;
+      padding: 0 12px 10px;
+      padding-bottom: max(10px, env(safe-area-inset-bottom));
+      color: var(--muted-foreground);
+      text-align: center;
     }
     #kb-point-guide .kb-detail { padding: 16px; }
     #kb-point-guide .kb-detail-top {
@@ -543,6 +594,15 @@
       #kb-point-guide .kb-point-index { display: flex; width: 100%; max-width: 100%; }
       #kb-point-guide .kb-hotspot { width: 34px; height: 34px; }
       #kb-point-guide .kb-hotspot::after { inset: 7px; }
+      /* Reclaim the page's side gutters so the map uses the full screen width. */
+      #kb-point-guide .kb-map-area > .kb-map-wrap {
+        margin-left: calc(-1 * var(--page-gutter, 16px));
+        margin-right: calc(-1 * var(--page-gutter, 16px));
+        width: auto;
+        /* The shared rule caps this at 100% of the column, which would undo
+           the negative margins. */
+        max-width: none;
+      }
       #kb-point-guide .btn { min-height: 44px; }
       #kb-point-guide .kb-icon-btn { width: 44px; min-width: 44px; }
     }
@@ -583,6 +643,9 @@
         <button class="kb-hotspot" data-point="M" style="left:44.15%;top:96.20%" type="button" aria-label="Open Point M" aria-pressed="false"><span class="sr-only">Point M</span></button>
       </div>
       <p class="kb-map-note text-small">Selected junctions are ringed in orange. Points without supplied material show a ready-to-fill placeholder.</p>
+      <div class="kb-map-actions">
+        <button class="btn" type="button" data-action="expand-map">Expand map</button>
+      </div>
       <div class="kb-point-index" aria-label="Point selector"></div>
     </section>
 
@@ -595,6 +658,17 @@
       <p id="kb-guide-subtitle" class="kb-subtitle"></p>
       <div id="kb-guide-content"></div>
     </aside>
+  </div>
+
+  <div class="kb-map-fs" id="kb-map-fs" hidden role="dialog" aria-modal="true" aria-label="Expanded route map">
+    <div class="kb-fs-bar">
+      <button class="btn kb-icon-btn" type="button" data-action="zoom-out" aria-label="Zoom out">−</button>
+      <span class="kb-zoom-label text-small" id="kb-zoom-label">Fit</span>
+      <button class="btn kb-icon-btn" type="button" data-action="zoom-in" aria-label="Zoom in">+</button>
+      <button class="btn kb-fs-close" type="button" data-action="close-map">Close</button>
+    </div>
+    <div class="kb-fs-scroll" id="kb-fs-scroll"></div>
+    <p class="kb-fs-hint text-small">Zoom in, then drag to move around. Tap a junction to open its notes.</p>
   </div>
 
   <script>
@@ -1195,6 +1269,60 @@
       frame.appendChild(iframe);
     }
 
+    /* ================== expanded map ==================
+       The real .kb-map-wrap is moved into the overlay rather than cloned, so
+       the hotspots, their aria state and the delegated click handler all keep
+       working with no duplicate DOM to keep in sync. */
+
+    const mapArea = root.querySelector('.kb-map-area');
+    const mapWrap = root.querySelector('.kb-map-wrap');
+    const mapNote = root.querySelector('.kb-map-note');
+    const mapOverlay = root.querySelector('#kb-map-fs');
+    const fsScroll = root.querySelector('#kb-fs-scroll');
+    const zoomLabel = root.querySelector('#kb-zoom-label');
+
+    const ZOOMS = [1, 1.75, 2.5, 3.5];
+    let zoomStep = 0;
+    let mapExpanded = false;
+
+    function applyZoom() {
+      mapWrap.style.width = zoomStep === 0 ? '100%' : `${ZOOMS[zoomStep] * 100}%`;
+      zoomLabel.textContent = zoomStep === 0 ? 'Fit' : `${Math.round(ZOOMS[zoomStep] * 100)}%`;
+      root.querySelector('[data-action="zoom-out"]').disabled = zoomStep === 0;
+      root.querySelector('[data-action="zoom-in"]').disabled = zoomStep === ZOOMS.length - 1;
+    }
+
+    function openMap() {
+      if (mapExpanded) return;
+      mapExpanded = true;
+      fsScroll.appendChild(mapWrap);
+      mapOverlay.hidden = false;
+      /* Not "Fit": fitting the width is roughly what the inline map already
+         shows, so opening there would look like nothing happened. Start one
+         step in, centred, and let Fit be a zoom-out away. */
+      zoomStep = 1;
+      applyZoom();
+      fsScroll.scrollLeft = Math.max(0, (fsScroll.scrollWidth - fsScroll.clientWidth) / 2);
+      fsScroll.scrollTop = Math.max(0, (fsScroll.scrollHeight - fsScroll.clientHeight) / 2);
+      try { document.body.style.overflow = 'hidden'; } catch (error) { /* no body to lock */ }
+      root.querySelector('[data-action="close-map"]').focus();
+    }
+
+    function closeMap() {
+      if (!mapExpanded) return;
+      mapExpanded = false;
+      mapWrap.style.width = '';
+      mapArea.insertBefore(mapWrap, mapNote);
+      mapOverlay.hidden = true;
+      try { document.body.style.overflow = ''; } catch (error) { /* nothing to restore */ }
+      const expand = root.querySelector('[data-action="expand-map"]');
+      if (expand) expand.focus();
+    }
+
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && mapExpanded) closeMap();
+    });
+
     /* ================== application state ================== */
 
     let current = 'A';
@@ -1541,6 +1669,11 @@
           return;
         }
 
+        if (action === 'expand-map') { openMap(); return; }
+        if (action === 'close-map') { closeMap(); return; }
+        if (action === 'zoom-in') { zoomStep = Math.min(ZOOMS.length - 1, zoomStep + 1); applyZoom(); return; }
+        if (action === 'zoom-out') { zoomStep = Math.max(0, zoomStep - 1); applyZoom(); return; }
+
         if (action === 'toggle-autoload') {
           prefs.autoLoadStreetView = !prefs.autoLoadStreetView;
           savePrefs();
@@ -1668,6 +1801,9 @@
 
       const pointButton = event.target.closest('[data-point]');
       if (pointButton && root.contains(pointButton)) {
+        /* Picking a junction from the expanded map should show its notes,
+           which are behind the overlay. */
+        if (mapExpanded) closeMap();
         if (mode === 'edit' || mode === 'preview') {
           harvest();
           pending = {
